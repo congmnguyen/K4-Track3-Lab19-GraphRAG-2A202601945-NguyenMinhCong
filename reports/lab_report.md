@@ -1,122 +1,77 @@
-# Báo Cáo Thực Hành & Thuyết Minh Kỹ Thuật — Lab 19: GraphRAG vs Flat RAG
+# Báo cáo Lab 19 — GraphRAG vs Flat RAG
 
-**Học viên:** [Họ và Tên]  
-**Khóa học:** AICB-K34 · Track 3: GraphRAG  
-**Ngày thực hiện:** [Ngày/Tháng/Năm]  
+**Học viên:** Nguyễn Minh Công · **Mã:** 2A202601945 · **Ngày:** 19/08/2026
 
----
+> Benchmark dưới đây là lần chạy mẫu lưu tại `outputs/`. Khi đổi corpus, model hoặc Neo4j instance phải chạy lại notebook; các số không phải kết luận phổ quát.
 
-## 📌 PHẦN 1: THUYẾT MINH KỸ THUẬT & PHÂN TÍCH CA LỖI
+## Phần 1 — Thuyết minh kỹ thuật và phân tích lỗi
 
-### 1. Coreference Resolution (Phân giải đại từ)
-> **Tình huống thực tế:** Nêu ít nhất 1 tình huống cụ thể trong dữ liệu HackerNoon mà cơ chế Coreference Resolution phân giải sai hoặc gặp khó khăn. Hậu quả của nó đối với Knowledge Graph là gì?
+### 1. Coreference resolution
 
-*Trả lời:*
-- **Ví dụ từ dữ liệu:** [Trích dẫn chunk_id hoặc câu văn cụ thể]
-- **Hiện tượng:** [Ví dụ: 'The company' bị nhầm sang công ty được nhắc đến ở câu trước thay vì chủ ngữ chính]
-- **Hậu quả đối với Graph:** [Ví dụ: Tạo ra False Edge gán nhầm sự kiện M&A cho đối thủ cạnh tranh]
+Ca khó điển hình: “Microsoft discussed OpenAI with regulators. The company later announced a new model.” *The company* có thể là Microsoft hoặc OpenAI. Nếu thay bằng Microsoft, extractor có thể tạo cạnh sai `Microsoft-DEVELOPED->model`. Pipeline chỉ thay khi antecedent duy nhất, rõ ràng và trong cùng chunk; trường hợp mơ hồ được giữ nguyên và ghi `unresolved_mentions`. False negative làm giảm recall nhưng an toàn hơn false edge lan sang mọi truy vấn hai hop.
 
----
+### 2. Entity resolution và lexical guard
 
-### 2. Entity Resolution Threshold & Lexical Guard
-> **Ngưỡng & Cơ chế Guard:** Bạn chọn ngưỡng cosine similarity là bao nhiêu cho vector matching? Trích dẫn 1 cặp thực thể có độ tương đồng vector cao ($> 0.85$) nhưng bị Lexical Guard chặn không cho gộp (Reject) và giải thích lý do.
+Ngưỡng vector là **0.90**, tối đa 5 láng giềng cùng type. Alias phổ biến được xử lý trước; ANN chỉ sinh candidate, `merge_guard()` mới quyết định gộp dựa trên tên đã bỏ suffix và lexical ratio ≥0.72. `Apple` và `Apple Music` có thể có cosine >0.85 do cùng token nhưng bị chặn vì Company và Technology khác nhau (type blocking). `Sam Altman` và `Steve Altman` cũng không được gộp dù cùng họ. Union-Find chỉ hợp nhất candidate qua cả type blocking và guard.
 
-*Trả lời:*
-- **Ngưỡng cosine similarity:** `threshold = ...` (ví dụ: 0.90)
-- **Cặp thực thể bị Guard chặn:** `[Thực thể A]` vs `[Thực thể B]` (Ví dụ: `Sam Altman` vs `Steve Altman` hoặc `Apple` vs `Apple Music`)
-- **Lý do chặn:** [Lý do ngữ nghĩa tại sao không được gộp 2 thực thể này]
+### 3. Super-node mitigation
 
----
+Ba node dự kiến có degree cao nhất là Microsoft, Google và OpenAI; cell `graph_checks()` xuất degree thực từ Neo4j sau ingestion, nên báo cáo không giả lập con số chưa đo. Với degree >100, retrieval lấy tối đa 50 cạnh mới nhất; toàn query tối đa 250 cạnh và 14.000 ký tự. Chính sách giảm fan-out, latency và token, giữ tin hiện hành. Rủi ro là mất cạnh lịch sử. Cải thiện bằng nhận diện thời gian trong query, lọc date trước cap và chia quota theo relation/community.
 
-### 3. Đồ thị & Super-node Mitigation
-> **Đặc trưng đồ thị & Cắt tỉa cạnh:** Top 3 thực thể có bậc (degree) cao nhất trong đồ thị là gì? Việc ưu tiên lấy $N$ cạnh ($N=50$) có `published_date` mới nhất tại các Super-node mang lại ưu điểm gì và có rủi ro tiềm ẩn nào?
+### 4. Benchmark và ca lỗi
 
-*Trả lời:*
-- **Top 3 Super-nodes:**
+| Metric | Flat | Graph | Delta |
+|---|---:|---:|---:|
+| Comprehensiveness | 3.2 | 5.0 | +1.8 |
+| Faithfulness | 4.8 | 5.0 | +0.2 |
+| Multi-hop reasoning | 2.6 | 4.8 | +2.2 |
+| Latency (s) | 0.464 | 0.770 | +0.306 |
+| Tokens | 590.4 | 979.0 | +388.6 |
 
-| Hạng | Tên thực thể | Loại thực thể (Type) | Bậc kết nối (Degree) |
-|------|--------------|---------------------|----------------------|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
+**Flat thất bại — G04.** Một chunk nói Microsoft đầu tư OpenAI, chunk khác nói OpenAI phát triển GPT-4. Top-k ưu tiên đoạn GPT-4 nên Flat bỏ quan hệ đầu tư. Graph đi theo `Microsoft-INVESTED_IN->OpenAI-DEVELOPED->GPT-4`, giữ evidence và chunk ID cho hai hop.
 
-- **Ưu điểm & Rủi ro của Temporal Mitigation:**
-  - *Ưu điểm:* [Giảm thiểu bùng nổ context, giữ lại thông tin cập nhật nhất...]
-  - *Rủi ro:* [Nếu câu hỏi liên quan đến sự kiện lịch sử trong quá khứ xa có thể bị cắt mất...]
+**Graph khó khăn — G05.** Nếu cạnh 2019 bị extractor bỏ sót hoặc newest-first cap loại, graph chỉ thấy 2023 và không mô tả được diễn tiến. Vector fallback vẫn có thể tìm bài cũ. Khắc phục: temporal filtering, extraction retry/checkpoint, sufficiency check với hop 3, rồi hợp nhất graph và vector.
 
----
+### 5. Trade-off, kiểm soát agent và scale
 
-### 4. So sánh Thực nghiệm (Flat RAG vs GraphRAG)
+Flat có index đơn giản, latency thấp, ít token; phù hợp factoid. Graph tốn extraction, resolution, graph storage và traversal nhưng tốt khi nối nhiều tài liệu. Hybrid được chọn vì graph có thể thiếu cạnh còn vector giữ nguyên văn bản.
 
-#### Bảng tổng hợp Benchmark (LLM-as-a-Judge):
+Tôi từ chối cosine mọi cặp mention O(N²), không phù hợp 350 MB. Thiết kế dùng type blocking + FAISS + lexical guard. Ở khoảng 100.000 bài, bottleneck đầu tiên là LLM extraction (chi phí/rate limit/retry), sau đó entity resolution và database write. Giải pháp: async queue có idempotency key, batch/checkpoint, ANN/HNSW theo type, `UNWIND` 1.000 rows, partition thời gian/community và incremental ingestion. Secrets chỉ lấy từ environment/Colab Secrets.
 
-| Tiêu chí đánh giá | Flat RAG | GraphRAG | Độ chênh lệch ($\Delta$) | Nhận xét phân tích |
-|-------------------|----------|----------|--------------------------|-------------------|
-| **Comprehensiveness (1–5)** | | | | |
-| **Faithfulness (1–5)** | | | | |
-| **Multi-hop Reasoning (1–5)** | | | | |
-| **Latency trung bình (s)** | | | | |
-| **Token usage trung bình** | | | | |
+## Phần 2 — Reflection và action plan
 
-#### Phân tích 2 Ca lỗi Điển hình:
-1. **Ca lỗi Flat RAG thất bại (GraphRAG thành công):**
-   - *Question ID & Câu hỏi:* 
-   - *Tại sao Flat RAG thất bại?* [Ví dụ: Vector search không kết nối được 2 chunks chứa thông tin rời rạc...]
-   - *GraphRAG đã giải quyết như thế nào?* [Ví dụ: Graph traversal qua cạnh A -> B -> C...]
-2. **Ca lỗi GraphRAG thất bại (hoặc cả hai cùng sai):**
-   - *Question ID & Câu hỏi:* 
-   - *Nguyên nhân:* [Ví dụ: Thiếu seed entity, missing edge trong bước extraction, hoặc super-node cap cắt mất cạnh...]
-   - *Đề xuất khắc phục:* [...]
+### 1. Mapping bài giảng
 
----
+| Khái niệm | Module | Hàm | Quan sát |
+|---|---|---|---|
+| Conservative coreference | M1 | `resolve_coref_batch()`, `run_coref()` | Batch lỗi fallback nguyên văn và audit |
+| Schema allowlist | M2 | `ALLOWED_NODE_TYPES`, `ALLOWED_RELATIONS` | Record sai schema bị loại |
+| Bulk Cypher | M2 | `bulk_insert_nodes()`, `bulk_insert_edges()` | `UNWIND`, batch 1.000 |
+| Entity resolution | M3 | `build_resolution_map()`, `merge_guard()`, `UF` | Alias → ANN → guard → union-find |
+| Super-node cap | M4 | `retrieve_graph_context()` | 50/node, 250/query, 14.000 chars |
+| LLM judge | M5 | `judge_answer()`, `run_evaluation()` | Ba score, rationale, checkpoint |
 
-### 5. Đánh đổi (Trade-offs) & Kiểm soát AI Coding Agent
-> **Trade-offs, Agent Control & Scale 350MB:** 
-> - So sánh sự đánh đổi giữa GraphRAG vs Flat RAG về Latency, Token và Indexing Overhead.
-> - Trong lúc làm bài, AI Coding Agent từng đề xuất điều gì mà bạn **từ chối áp dụng**? Tại sao?
-> - Nếu scale lên toàn bộ 350MB (~100,000 bài báo), bottleneck đầu tiên ở đâu và giải pháp xử lý là gì?
+### 2. Debugging và bài học
 
-*Trả lời:*
-- **Đánh đổi Quality vs Cost vs Latency:** [...]
-- **Quyết định từ chối AI Coding Agent:** [Ví dụ: Từ chối thuật toán $O(N^2)$ pairwise cosine trên toàn bộ dataset vì gây tràn RAM/OOM...]
-- **Giải pháp scale 350MB:** [Ví dụ: Async batch extraction với worker queue, HNSW index với blocking cho Entity Resolution, Community Partitioning...]
+Lỗi khó nhất là nhầm similarity cao với identity. Embedding đơn lẻ dễ gộp sản phẩm vào công ty hoặc hai người cùng họ. Tôi dùng blocking theo type, Unicode normalization, suffix stripping, lexical guard, manual alias nhỏ và audit `MERGE_MANUAL`/`MERGE_VECTOR`/`REJECT_GUARD`. Entity resolution cần bằng chứng và khả năng audit, không chỉ threshold.
 
----
+Provenance rỗng là lỗi vận hành khác. `graph_checks()` bắt buộc `invalid_provenance_edges == 0`; production nên mở rộng kiểm tra để coi chuỗi ngày rỗng là invalid.
 
-## 📌 PHẦN 2: SUY NGẪM & KẾ HOẠCH ĐỒ ÁN (Reflection & Action Plan)
+### 3. Action plan đồ án
 
-### 1. Mapping Bài giảng vào Code
-| Khái niệm trong bài giảng | Module tương ứng | Hàm / Khối code cụ thể | Quan sát thực tế & Đánh giá |
-|--------------------------|------------------|------------------------|-----------------------------|
-| **Conservative Coreference** | Module 1 | `resolve_coref_batch()` | ... |
-| **Schema & Allowlist Guard** | Module 2 | `ALLOWED_NODE_TYPES`, `ALLOWED_RELATIONS` | ... |
-| **Bulk Cypher Ingestion** | Module 2 | `bulk_insert_nodes()`, `bulk_insert_edges()` | ... |
-| **Entity Resolution & Union-Find** | Module 3 | `build_resolution_map()`, `UF` | ... |
-| **Super-node Degree Cap** | Module 4 | `retrieve_graph_context()` | ... |
-| **LLM-as-a-Judge Evaluation** | Module 5 | `judge_answer()` | ... |
+**Đồ án:** trợ lý tra cứu quy định và phụ thuộc chính sách nội bộ. Chọn Hybrid GraphRAG vì câu hỏi nối quy định, phòng ban, vai trò, biểu mẫu và phiên bản; Flat vẫn giữ nội dung chưa thành cạnh.
 
----
+- Nodes: `Policy`, `Clause`, `Department`, `Role`, `Form`, `System`, `Version`.
+- Relations: `OWNS`, `APPLIES_TO`, `REQUIRES`, `SUPERSEDES`, `REFERENCES`, `USES_FORM`, `EFFECTIVE_FROM`.
+- Resolution: ID tài liệu là khóa mạnh; dictionary alias; ANN chỉ sinh candidate; owner/type/date làm guard.
+- Super-node: quota theo relation và thời gian hiệu lực, ưu tiên version active, vẫn có global cap.
+- Evaluation: golden factoid/multi-hop/version comparison; faithfulness yêu cầu citation tới clause/version.
 
-### 2. Quá trình Debugging & Bài học
-- **Lỗi kỹ thuật phức tạp nhất gặp phải:** [...]
-- **Cách bạn đã xử lý thành công:** [...]
+## Tự đánh giá
 
----
-
-### 3. Kế hoạch Áp dụng vào Đồ án Thực tế (Action Plan)
-- **Tên đồ án / Dự án:** [Tên dự án]
-- **Đặc thù bài toán & Lý do chọn giải pháp:** [Tại sao bài toán của bạn cần GraphRAG hay chỉ cần Flat/Hybrid RAG?]
-- **Cấu trúc Node & Relation dự kiến:**
-  - Nodes: `...`
-  - Relations: `...`
-- **Chiến lược xử lý Super-node & Entity Resolution:** [...]
-
----
-
-## 🎯 TỰ ĐÁNH GIÁ
-| Tiêu chí | Điểm tự chấm (1–5) | Ghi chú |
-|----------|-------------------|---------|
-| Mức độ hiểu bài giảng GraphRAG | | |
-| Khả năng kiểm soát AI Coding Agent | | |
-| Chất lượng đồ thị tri thức xây dựng | | |
-| Khả năng phân tích và debug hệ thống | | |
+| Tiêu chí | Điểm | Ghi chú |
+|---|---:|---|
+| Hiểu GraphRAG | 4/5 | Nắm pipeline và failure mode |
+| Kiểm soát agent | 4/5 | Giữ schema, scale guard, tránh O(N²) |
+| Chất lượng graph | 4/5 | Có provenance/audit; cần chạy lại Aura thật |
+| Phân tích/debug | 4/5 | Có root cause và mitigation |
