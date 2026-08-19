@@ -2,7 +2,7 @@
 
 **Học viên:** Nguyễn Minh Công · **Mã:** 2A202601945 · **Ngày:** 19/08/2026
 
-> Benchmark dưới đây là lần chạy mẫu lưu tại `outputs/`. Khi đổi corpus, model hoặc Neo4j instance phải chạy lại notebook; các số không phải kết luận phổ quát.
+> Benchmark dưới đây là lần chạy mẫu 5 câu lưu tại `outputs/`, không phải kết quả của golden set chính thức. Notebook hiện đọc `data/graphrag_golden_50_first5000.csv` gồm 25 câu G5000-26…G5000-50 từ upstream. Cần chạy lại với 5.000 dòng nguồn, Neo4j và API credentials trước khi nộp kết quả benchmark chính thức.
 
 ## Phần 1 — Thuyết minh kỹ thuật và phân tích lỗi
 

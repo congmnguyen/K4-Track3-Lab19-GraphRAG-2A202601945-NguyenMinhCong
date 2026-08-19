@@ -21,7 +21,8 @@ env/
 *.csv
 golden_dataset.csv
 !reports/*.csv
-!data/golden_dataset.csv
+!data/graphrag_golden_50_first5000.csv
+!data/graphrag_golden_50_first5000_detailed.csv
 !outputs/graphrag_eval_results.csv
 !outputs/graphrag_vs_flatrag_summary.csv
 *.jsonl
